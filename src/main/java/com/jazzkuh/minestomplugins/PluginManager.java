@@ -1,6 +1,7 @@
 package com.jazzkuh.minestomplugins;
 
 import com.google.gson.Gson;
+import net.minestom.server.MinecraftServer;
 import net.minestom.server.ServerProcess;
 import net.minestom.server.utils.validate.Check;
 import org.jetbrains.annotations.ApiStatus;
@@ -32,7 +33,7 @@ import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
-public class PluginManager<S> {
+public class PluginManager {
 
     public final static Logger LOGGER = LoggerFactory.getLogger("PluginManager");
 
@@ -41,7 +42,7 @@ public class PluginManager<S> {
     private final static Gson GSON = new Gson();
 
     private final ServerProcess serverProcess;
-    private final S server;
+    private final MinecraftServer server;
 
     // LinkedHashMaps are HashMaps that preserve order
     private final Map<String, Plugin> plugins = new LinkedHashMap<>();
@@ -55,7 +56,7 @@ public class PluginManager<S> {
 
     private State state = State.NOT_STARTED;
 
-    public PluginManager(ServerProcess serverProcess, S server) {
+    public PluginManager(ServerProcess serverProcess, MinecraftServer server) {
         this.serverProcess = serverProcess;
         this.server = server;
     }
