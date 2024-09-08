@@ -1,6 +1,9 @@
 package com.jazzkuh.minestomplugins;
 
 import com.google.gson.Gson;
+import net.minestom.dependencies.DependencyGetter;
+import net.minestom.dependencies.ResolvedDependency;
+import net.minestom.dependencies.maven.MavenRepository;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.ServerProcess;
 import net.minestom.server.utils.validate.Check;
@@ -17,6 +20,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
+import java.net.URL;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -60,6 +64,7 @@ public class PluginManager {
         this.serverProcess = serverProcess;
         this.server = server;
     }
+
 
     /**
      * Gets if the plugins should be loaded during startup.
@@ -241,6 +246,7 @@ public class PluginManager {
             }
 
             discoveredPlugins = this.generateLoadOrder(discoveredPlugins);
+            loadDependencies(discoveredPlugins);
 
             // remove invalid plugins
             discoveredPlugins.removeIf(ext -> ext.loadStatus != DiscoveredPlugin.LoadStatus.LOAD_SUCCESS);
@@ -559,6 +565,75 @@ public class PluginManager {
                         || plugins.stream().allMatch(ext -> this.plugins.containsKey(ext.getName().toLowerCase()));
     }
 
+    private void loadDependencies(@NotNull List<DiscoveredPlugin> plugins) {
+        List<DiscoveredPlugin> allLoadedPlugins = new LinkedList<>(plugins);
+
+        for (Plugin plugin : immutablePlugins.values())
+            allLoadedPlugins.add(plugin.getOrigin());
+
+        for (DiscoveredPlugin discoveredPlugin : plugins) {
+            try {
+                DependencyGetter getter = new DependencyGetter();
+                DiscoveredPlugin.ExternalDependencies externalDependencies = discoveredPlugin.getExternalDependencies();
+                List<MavenRepository> repoList = new LinkedList<>();
+                for (var repository : externalDependencies.repositories) {
+
+                    if (repository.name == null || repository.name.isEmpty()) {
+                        throw new IllegalStateException("Missing 'name' element in repository object.");
+                    }
+
+                    if (repository.url == null || repository.url.isEmpty()) {
+                        throw new IllegalStateException("Missing 'url' element in repository object.");
+                    }
+
+                    repoList.add(new MavenRepository(repository.name, repository.url));
+                }
+
+                getter.addMavenResolver(repoList);
+
+                for (String artifact : externalDependencies.artifacts) {
+                    var resolved = getter.get(artifact, dependenciesFolder);
+                    addDependencyFile(resolved, discoveredPlugin);
+                    LOGGER.trace("Dependency of plugin {}: {}", discoveredPlugin.getName(), resolved);
+                }
+
+                PluginClassLoader pluginClassLoader = discoveredPlugin.getClassLoader();
+                for (String dependencyName : discoveredPlugin.getDependencies()) {
+                    var resolved = plugins.stream()
+                            .filter(ext -> ext.getName().equalsIgnoreCase(dependencyName))
+                            .findFirst()
+                            .orElseThrow(() -> new IllegalStateException("Unknown dependency '" + dependencyName + "' of '" + discoveredPlugin.getName() + "'"));
+
+                    PluginClassLoader dependencyClassLoader = resolved.getClassLoader();
+
+                    pluginClassLoader.addChild(dependencyClassLoader);
+                    LOGGER.trace("Dependency of plugin {}: {}", discoveredPlugin.getName(), resolved);
+                }
+            } catch (Exception e) {
+                discoveredPlugin.loadStatus = DiscoveredPlugin.LoadStatus.MISSING_DEPENDENCIES;
+                LOGGER.error("Failed to load dependencies for plugin {}", discoveredPlugin.getName());
+                LOGGER.error("Plugin '{}' will not be loaded", discoveredPlugin.getName());
+                LOGGER.error("This is the exception", e);
+            }
+        }
+    }
+
+    private void addDependencyFile(@NotNull ResolvedDependency dependency, @NotNull DiscoveredPlugin plugin) {
+        URL location = dependency.getContentsLocation();
+        plugin.files.add(location);
+        plugin.getClassLoader().addURL(location);
+        LOGGER.trace("Added dependency {} to plugin {} classpath", location.toExternalForm(), plugin.getName());
+
+        // recurse to add full dependency tree
+        if (!dependency.getSubdependencies().isEmpty()) {
+            LOGGER.trace("Dependency {} has subdependencies, adding...", location.toExternalForm());
+            for (ResolvedDependency sub : dependency.getSubdependencies()) {
+                addDependencyFile(sub, plugin);
+            }
+            LOGGER.trace("Dependency {} has had its subdependencies added.", location.toExternalForm());
+        }
+    }
+
     private boolean loadPluginList(@NotNull List<DiscoveredPlugin> pluginsToLoad) {
         // ensure correct order of dependencies
         LOGGER.debug("Reorder plugins to ensure proper load order");
@@ -645,5 +720,4 @@ public class PluginManager {
         // cleanup classloader
         // TODO: Is it necessary to remove the CLs since this is only called on shutdown?
     }
-
 }
